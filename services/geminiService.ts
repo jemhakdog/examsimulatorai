@@ -27,7 +27,7 @@ const getQuizSchema = () => {
           type: Type.OBJECT,
           properties: {
             questionText: { type: Type.STRING },
-            options: { 
+            options: {
               type: Type.ARRAY,
               items: { type: Type.STRING }
             },
@@ -70,7 +70,7 @@ export const generateQuizFromContent = async (
   difficulty: Difficulty,
   settings?: AISettings
 ): Promise<GeneratedQuizResponse> => {
-  
+
   const provider = settings?.provider || 'gemini';
 
   if (provider === 'gemini') {
@@ -81,22 +81,22 @@ export const generateQuizFromContent = async (
 };
 
 const generateWithGemini = async (
-  base64Data: string, 
-  mimeType: string, 
-  difficulty: Difficulty, 
+  base64Data: string,
+  mimeType: string,
+  difficulty: Difficulty,
   settings?: AISettings
 ) => {
   try {
     // Use custom key if provided in settings, otherwise use env key
     const apiKey = settings?.gemini?.apiKey || process.env.API_KEY;
-    
+
     if (!apiKey) {
       throw new Error("Missing Gemini API Key. Please provide one in settings or configure the environment.");
     }
 
     const ai = new GoogleGenAI({ apiKey });
     const model = "gemini-2.5-flash";
-    
+
     const response = await ai.models.generateContent({
       model: model,
       contents: {
@@ -146,8 +146,8 @@ const extractTextFromPdf = async (base64Data: string): Promise<string> => {
       const loadingTask = pdfjsLib.getDocument({ data: bytes });
       pdf = await loadingTask.promise;
     } catch (loadError: any) {
-       console.error("PDF Load Error:", loadError);
-       throw new Error(`Could not load PDF document. ${loadError.message}`);
+      console.error("PDF Load Error:", loadError);
+      throw new Error(`Could not load PDF document. ${loadError.message}`);
     }
 
     let fullText = '';
@@ -160,14 +160,14 @@ const extractTextFromPdf = async (base64Data: string): Promise<string> => {
         const pageText = textContent.items
           .map((item: any) => item.str)
           .join(' ');
-        
+
         fullText += `--- PAGE ${i} ---\n${pageText}\n\n`;
       } catch (pageError) {
         console.warn(`Skipping page ${i} due to extraction error`, pageError);
         fullText += `--- PAGE ${i} (Extraction Failed) ---\n\n`;
       }
     }
-    
+
     if (!fullText.trim()) {
       throw new Error("PDF appears to be empty or contains only scanned images without text layer.");
     }
@@ -184,12 +184,12 @@ const extractTextFromPdf = async (base64Data: string): Promise<string> => {
 };
 
 const generateWithOpenAI = async (
-  base64Data: string, 
-  mimeType: string, 
-  difficulty: Difficulty, 
+  base64Data: string,
+  mimeType: string,
+  difficulty: Difficulty,
   config: AISettings['openai']
 ) => {
-  
+
   const messages: any[] = [
     {
       role: "system",
@@ -198,4 +198,69 @@ const generateWithOpenAI = async (
   ];
 
   let userContent: any[] = [];
-  const promptText = PROMPT_TEMPLATE(difficulty) + "
+  const promptText = PROMPT_TEMPLATE(difficulty);
+
+  // Handle different mime types for OpenAI
+  if (mimeType === 'application/pdf') {
+    // Extract text from PDF for OpenAI (doesn't support PDF directly)
+    const extractedText = await extractTextFromPdf(base64Data);
+    userContent = [
+      { type: "text", text: extractedText },
+      { type: "text", text: promptText }
+    ];
+  } else if (mimeType.startsWith('image/')) {
+    // OpenAI supports images via URL or base64
+    userContent = [
+      {
+        type: "image_url",
+        image_url: { url: `data:${mimeType};base64,${base64Data}` }
+      },
+      { type: "text", text: promptText }
+    ];
+  } else {
+    // For text-based content
+    const textContent = atob(base64Data);
+    userContent = [
+      { type: "text", text: textContent },
+      { type: "text", text: promptText }
+    ];
+  }
+
+  messages.push({
+    role: "user",
+    content: userContent
+  });
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config?.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: config?.model || 'gpt-4o',
+        messages: messages,
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || 'OpenAI API request failed');
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error("No response generated from OpenAI.");
+    }
+
+    return JSON.parse(content) as GeneratedQuizResponse;
+
+  } catch (error) {
+    console.error("OpenAI Quiz Generation Error:", error);
+    throw error;
+  }
+};
