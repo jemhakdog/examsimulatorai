@@ -1,0 +1,5 @@
+{
+  "name": "Smart Exam Simulator",
+  "description": "An AI-powered study companion that converts your notes, PDFs, and images into interactive practice exams using Gemini models.",
+  "requestFramePermissions": []
+}
